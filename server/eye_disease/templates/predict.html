@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Eye Disease Prediction Result</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #ffffff;
+            margin: 0;
+            padding: 40px 0;
+            text-align: center;
+        }
+
+        .container {
+            background: #f9f9f9;
+            padding: 40px 50px;
+            border-radius: 16px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+            max-width: 700px;
+            margin: auto;
+        }
+
+        #map {
+            height: 400px;
+            width: 100%;
+            margin-top: 20px;
+            border-radius: 10px;
+            border: 2px solid #ccc;
+        }
+
+        #hospitalList {
+            text-align: left;
+            margin-top: 20px;
+            padding-left: 20px;
+        }
+
+        h2 {
+            color: #1e272e;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .result {
+            font-size: 24px;
+            font-weight: 700;
+            margin-top: 25px;
+            color: #0097e6;
+        }
+
+        .confidence {
+            font-size: 18px;
+            color: #2f3542;
+            margin: 15px 0;
+        }
+
+        h4 {
+            color: #3742fa;
+            margin-top: 30px;
+            font-size: 20px;
+        }
+
+        ul {
+            list-style-type: disc;
+            margin: 10px 0 20px;
+            padding-left: 40px;
+            text-align: left;
+        }
+
+        p {
+            font-size: 16px;
+            color: #535c68;
+        }
+
+        button {
+            margin-top: 15px;
+            padding: 12px 25px;
+            font-size: 16px;
+            font-weight: bold;
+            background-color: #0984e3;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #0652DD;
+        }
+
+        input[type="file"],
+        input[type="text"] {
+            margin-top: 20px;
+            padding: 10px;
+            width: 90%;
+            font-size: 16px;
+            border: 1px solid #dcdde1;
+            border-radius: 8px;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        input[type="text"] {
+            margin-bottom: 10px;
+        }
+
+        .divider {
+            margin: 30px auto;
+            border-top: 2px dashed #ccc;
+            width: 90%;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Upload Retinal Image for Prediction</h2>
+
+    <form method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="file" name="image" accept="image/*" required><br>
+        <button type="submit">Predict</button>
+    </form>
+
+    {% if prediction %}
+        <div class="divider"></div>
+        <div class="result">Prediction: {{ prediction }}</div>
+
+        {% if confidence %}
+            <div class="confidence">Confidence: {{ confidence }}</div>
+        {% endif %}
+
+        {% if "Normal" not in prediction %}
+            <form method="POST">
+                {% csrf_token %}
+                <input type="text" id="locationInput" name="location" placeholder="Enter your city or area" required>
+                <button type="button" onclick="findHospitals()">Find Nearby Eye Hospitals</button>
+            </form>
+
+            <div id="map" style="display: none;"></div>
+            <div id="hospitalList" style="display: none;"></div>
+        {% else %}
+            <p style="margin-top: 20px; font-weight: bold; color: green;">
+                No hospital required. Eye is normal.
+            </p>
+        {% endif %}
+
+        {% if precautions %}
+            <h4>Precautions:</h4>
+            <ul>
+                {% for item in precautions %}
+                    <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        {% if treatments %}
+            <h4>Treatment Suggestions:</h4>
+            <ul>
+                {% for item in treatments %}
+                    <li>{{ item }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        <form method="get" action="{% url 'predict_eye_disease' %}">
+            <button type="submit">Try Another Image</button>
+        </form>
+    {% endif %}
+</div>
+
+<script>
+    let map;
+    let userMarker;
+
+    function geocode(location, callback) {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(location)}`;
+        fetch(url)
+            .then(response => response.json())
+            .then(data => {
+                if (data && data.length > 0) {
+                    callback({ lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) });
+                } else {
+                    alert("Location not found.");
+                }
+            })
+            .catch(() => alert("Geocoding error."));
+    }
+
+    function findHospitals() {
+        const prediction = "{{ prediction|default:'' }}".toLowerCase();
+        if (prediction.includes("normal")) {
+            alert("No hospital required. Eye is normal.");
+            return;
+        }
+
+        const location = document.getElementById("locationInput").value;
+        const hospitalListDiv = document.getElementById("hospitalList");
+        const mapDiv = document.getElementById("map");
+
+        if (!location) {
+            alert("Please enter a location.");
+            return;
+        }
+
+        mapDiv.style.display = "block";
+        hospitalListDiv.style.display = "block";
+        hospitalListDiv.innerHTML = "";
+
+        geocode(location, (coords) => {
+            if (!map) {
+                map = L.map('map').setView([coords.lat, coords.lon], 13);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '&copy; OpenStreetMap contributors'
+                }).addTo(map);
+            } else {
+                map.setView([coords.lat, coords.lon], 13);
+                if (userMarker) map.removeLayer(userMarker);
+            }
+
+            userMarker = L.marker([coords.lat, coords.lon])
+                .addTo(map)
+                .bindPopup("Your Location").openPopup();
+
+            const overpassURL = `https://overpass-api.de/api/interpreter?data=[out:json];node(around:5000,${coords.lat},${coords.lon})[amenity=hospital];out;`;
+
+            fetch(overpassURL)
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.elements.length) {
+                        hospitalListDiv.innerHTML = "<p style='color:red;'>No hospitals found nearby.</p>";
+                        return;
+                    }
+
+                    let listHTML = "<h4>Nearby Eye Hospitals:</h4><ul>";
+
+                    data.elements.forEach(hospital => {
+                        const name = hospital.tags?.name || "Unnamed Hospital";
+                        const lat = hospital.lat;
+                        const lon = hospital.lon;
+
+                        L.marker([lat, lon])
+                            .addTo(map)
+                            .bindPopup(`<b>${name}</b>`);
+
+                        listHTML += `<li><strong>${name}</strong></li>`;
+                    });
+
+                    listHTML += "</ul>";
+                    hospitalListDiv.innerHTML = listHTML;
+                })
+                .catch(() => {
+                    hospitalListDiv.innerHTML = "<p style='color:red;'>Error fetching hospital data.</p>";
+                });
+        });
+    }
+</script>
+
+</body>
+</html>
